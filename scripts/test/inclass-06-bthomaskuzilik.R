@@ -139,7 +139,7 @@ risch_subset <- risch_receipts %>%
 glimpse(risch_subset)
 
 # This works but it is clunky... we no longer need the full individuals datasets, can remove to clean the enviornment
-rm(crapo_receipts, fulcher_receipts, risch_receipts, simpson_receipts)
+rm(crapo_receipts, fulcher_receipts, risch_receipts, simpson_receipts, select_vars)
 
 # ------------------------------------------------------------------- #
 # .......... slightly better (writing our own function) .......... ####
@@ -152,13 +152,16 @@ select_ind_donors <- function(df, vars, donor_type){
     filter(is_individual == donor_type)
 }
 
-# We can test to make sure everything is working. We already have our "select_vars" character vector in the environment, so it should run. We're only going to apply our function to the first slot in our "contribution_data" list for now, just until we are sure everything is working.
+# We can test to make sure everything is working. We first have to create a vector "select_vars" specifying which columns we want to keep. 
+select_vars <- c("is_individual", "contributor_name",  "contribution_receipt_amount", "committee_name", "report_year", "representative")
+
+# For now, we are only going to apply our function to the first slot in our "contribution_data" list for now, just until we are sure everything is working.
 test_fun <- select_ind_donors(df = contribution_data[[1]],
                               vars = select_vars,
                               donor_type = TRUE)
 
-# We can check that everything went according to plan by checking that the dimensions of the resulting tibble against the tibble we got from using exisitng functions (3979, 5)
-identical(dim(test_fun), dim(crapo_subset))
+# We can check that everything went according to plan by checking that the number of rows of the resulting tibble against the tibble we got from using exisitng functions (the number of columns will be different since we had slightly different select_vars)
+identical(nrow(test_fun), nrow(crapo_subset))
 glimpse(test_fun)
 
 # It worked! Remove the test object from the environment
@@ -177,9 +180,6 @@ ind_donors <- map(contribution_data,
 # The result is a new list: now each slot is the subsetted tibble. We can check this
 glimpse(ind_donors[[1]])
 
-# Remove from the environment so we can do even better
-rm(ind_donors)
-
 # ------------------------------------------------------------------------ #
 # .......... best (our own function + iteration + single df) .......... ####
 # ------------------------------------------------------------------------ #
@@ -188,8 +188,138 @@ rm(ind_donors)
 ind_donors <- map(contribution_data, 
                   function(x) select_ind_donors(df = x,
                                                 vars = select_vars,
-                                                donor_type = TRUE)) %>% 
-                  bind_rows()
+                                                donor_type = TRUE)) %>%
+  bind_rows()
 
 # Check that it worked and the result makes sense
 glimpse(ind_donors)
+
+# Clean environment
+rm(select_vars)
+
+# --------------------------- #
+# --------------------------- #
+# ..... ANALYZE DATA ..... ####
+# --------------------------- #
+# --------------------------- #
+
+# ------------------------------------------------- #
+# .......... clean tibbles separately .......... ####
+# ------------------------------------------------- #
+
+# Last time, we found the top 5 contributors for each congressman separately using pipes. We first passed the tibble we wanted to analyze ("simpson_subset"). We then grouped each individual contributor together with the group_by() function (each row in the tibble is a contribution, so people who have given multiple times will have multiple rows with multiple contribution amounts). We then tell R we want to do some math with the summarise() function - in this case, we want to create a new column called "total_given", which is the sum of each unique individual's contributions (with any NAs removed). We then use a pipe to hand this output to the slice_max() function, which is a form of the filter() function that will order each individual's contributions by amount ("total_given") and subset to the top 5 individuals. We then take that output and add a new column called "recipient" denoting that the recipient of the contributions was "Simpson". The output of this process is a new tibble called "simpson_top5", which has three columns ("contributor_name", "total_given", "recipient") and five rows (the top five individual contributors)
+simpson_top5 <- simpson_subset %>% 
+  group_by(contributor_name) %>% 
+  summarise(total_given = sum(contribution_receipt_amount, 
+                              na.rm = TRUE)) %>% 
+  slice_max(order_by = total_given, n = 5) %>% 
+  mutate(recipient = "Simpson")
+
+# We can check the output
+class(simpson_top5)
+glimpse(simpson_top5)
+simpson_top5
+
+# We repeated that for each congressman seperately
+fulcher_top5 <- fulcher_subset %>% 
+  group_by(contributor_name) %>% 
+  summarise(total_given = sum(contribution_receipt_amount, 
+                              na.rm = TRUE)) %>% 
+  slice_max(order_by = total_given, n = 5) %>% 
+  mutate(recipient = "Fulcher")
+
+crapo_top5 <- crapo_subset %>% 
+  group_by(contributor_name) %>% 
+  summarise(total_given = sum(contribution_receipt_amount, 
+                              na.rm = TRUE)) %>% 
+  slice_max(order_by = total_given, n = 5) %>% 
+  mutate(recipient = "Crapo")
+
+risch_top5 <- risch_subset %>% 
+  group_by(contributor_name) %>% 
+  summarise(total_given = sum(contribution_receipt_amount, 
+                              na.rm = TRUE)) %>% 
+  slice_max(order_by = total_given, n = 5) %>% 
+  mutate(recipient = "Risch")
+
+# We then combined these datasets together using bind_rows()
+old_top_5_donors <- bind_rows(simpson_top5, fulcher_top5, crapo_top5,
+                         risch_top5)
+old_top_5_donors
+
+# Clean environment
+rm(crapo_top5, fulcher_top5, risch_top5, simpson_top5)
+
+# ---------------------------------------------------------- #
+# .......... better (writing our own function) .......... ####
+# ---------------------------------------------------------- #
+
+# We can improve on this by writing our own function. We'll already be doing better since we have all the individual contributions in a single tibble ("ind_donors"), but now we want to do the same math/filtering. The point of a function is to be flexible, so we want to design it to work on other questions beyond what we need to do immediately (find the top 5 individual donors for each congressman). 
+
+
+find_top_n <- function(df, criteria_1, criteria_2, val, n){
+  df %>% 
+    group_by({{criteria_1}}, {{criteria_2}}) %>% 
+    summarise(total_given = sum({{val}}, na.rm = TRUE)) %>% 
+    slice_max(order_by = total_given, n = n)
+}
+
+top_5_donors <- find_top_n(df = ind_donors,
+                           criteria_1 = representative,
+                           criteria_2 = contributor_name,
+                           val = contribution_receipt_amount,
+                           n = 5)
+top_5_donors
+
+# ----------------------------- #
+# ----------------------------- #
+# ..... VISUALIZE DATA ..... ####
+# ----------------------------- #
+# ----------------------------- #
+
+top_5_donors
+
+# Create a single figure that shows each representative's top 5 donors and how much they've contributed (using facet_wrap)
+ggplot(data = top_5_donors, 
+       aes(x = reorder(contributor_name, total_given), 
+           y = total_given,
+           fill = representative)) +
+  geom_col() +
+  facet_wrap(vars(representative), scales = "free_y") +
+  labs(title = "Top 5 Donors by Representative",
+       x = "Contributor",
+       y = "Total Contributions ($)") +
+  coord_flip() +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 8),
+    legend.position = "none")
+
+# Custom function  
+plot_donors <- function(df) {
+  donors_by_rep <- split(df, df$representative)
+  
+  map(donors_by_rep, function(split_df) {
+    ggplot(data = split_df,
+      aes(x = reorder(contributor_name, total_given),
+          y = total_given,
+          fill = "coral")) +
+        geom_col() +
+        labs(title = paste("Top 5 Donors by Representative -", unique(split_df$representative)),
+             x = "Contributor", 
+             y = "Total Contributions ($)") +
+        coord_flip() +
+        theme_minimal() +
+        theme(plot.title = element_text(hjust = 0.5),
+          axis.text.y = element_text(size = 8),
+          legend.position = "none")
+  })
+}
+
+top_5_donor_plots <- plot_donors(top_5_donors)
+
+top_5_donor_plots[[1]]
+top_5_donor_plots[[2]]
+top_5_donor_plots[[3]]
+top_5_donor_plots[[4]]
